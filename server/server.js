@@ -1,14 +1,12 @@
 import { Server } from "socket.io";
-import cors from "cors"; 
 
 const io = new Server({
   cors: {
-    origin: "http://localhost:3000",  
+    origin: "http://localhost:3000",
     methods: ["GET", "POST"],
     credentials: true
   }
 });
-// in memory DB
 let chatMember = [];
 
 const findOnlineUsers = (roomId) => {
@@ -18,51 +16,89 @@ const findOnlineUsers = (roomId) => {
 };
 
 io.on("connection", (socket) => {
-  socket.on("join", (data) => {
-    socket.join(data.roomId);
-    chatMember.push({ ...data, socketId: socket.id });
+  socket.on("join", (data, cb) => {
+    try {
+      if (!data.roomId || !data.email) {
+        return cb({
+          success: false,
+          code: "INVALID DATA",
+          message: "roomId and email are required",
+        });
+      }
+      const already = chatMember.find(
+        (u) => u.email === data.email && u.roomId === data.roomId
+      );
 
-    io.to(data.roomId).emit("user-joined", {
-      email: data.email,
-      text: `${data.email} has joined the group`,
-    });
+      if (already) {
+        return cb({
+          success: false,
+          code: "ALREADY_JOINED",
+          message: `${data.email} already joined this room`,
+        });
+      }
+      socket.join(data.roomId);
+      chatMember.push({ ...data, socketId: socket.id });
 
-    const onlineUsers = findOnlineUsers(data.roomId);
+      io.to(data.roomId).emit("user-joined", {
+        type: "system",
+        email: data.email,
+        text: `${data.email} has joined the group`,
+      });
 
-    io.to(data.roomId).emit("online_users", onlineUsers);
+      const onlineUsers = findOnlineUsers(data.roomId);
+
+      io.to(data.roomId).emit("online_users", onlineUsers);
+
+      cb({
+        success: true,
+        code: "OK",
+        message: "Joined the room successfully",
+      });
+    } catch (e) {
+      cb({
+        success: false,
+        code: "INTERNAL SERVER ERROR",
+        message: e.message,
+      });
+    }
   });
 
+
   socket.on("send-message", (data) => {
-    io.to(data.roomId).emit("receive-message", data);
+    io.to(data.roomId).emit("receive-message", {
+      type: "chat",
+      email: data.email,
+      text: data.text,
+    });
   });
 
   socket.on("disconnect", () => {
     const idx = chatMember.findIndex((u) => u.socketId === socket.id);
-  
+
     if (idx === -1) {
       console.warn(`[disconnect] unknown socket: ${socket.id}`);
       return;
     }
-  
+
     const user = chatMember[idx];
-  
+
     chatMember.splice(idx, 1);
-  
+
     if (!user.roomId) {
       console.warn(`[disconnect] user has no roomId: ${user.email}`);
       return;
     }
-  
+
     io.to(user.roomId).emit("user-joined", {
+      type: "system",
       email: user.email,
       text: `${user.email} has left the chat`,
     });
-  
+
     const onlineUsers = findOnlineUsers(user.roomId);
-  
+
     io.to(user.roomId).emit("online_users", onlineUsers);
-  
   });
-  });
+});
 
 io.listen(4000);
